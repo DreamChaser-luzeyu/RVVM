@@ -214,7 +214,8 @@ void riscv_decoder_enable_fpu(rvvm_hart_t* vm, bool enable)
  */
 TSAN_SUPPRESS void riscv_run_till_event(rvvm_hart_t* vm)
 {
-    size_t inst_ptr = 0;  // Updated before any read
+    size_t inst_ptr = 0; // This variable marks the base address of a page on the REAL memory
+                         // Updated before any read
     uint32_t instruction;
     // page_addr should always mismatch pc by at least 1 page before execution
     vaddr_t inst_addr, page_addr = vm->registers[REGISTER_PC] + 0x1000;
@@ -243,9 +244,9 @@ TSAN_SUPPRESS void riscv_run_till_event(rvvm_hart_t* vm)
             riscv_emulate(vm, instruction);
             // Update pointer to the current page in real memory
             // If we are executing code from MMIO, direct memory fetch fails
-            vaddr_t vpn = vm->registers[REGISTER_PC] >> 12;
-            inst_ptr = vm->tlb[vpn & TLB_MASK].ptr;
-            page_addr = vm->tlb[vpn & TLB_MASK].e << 12;
+            vaddr_t vpn = vm->registers[REGISTER_PC] >> 12;  // Virtual Page Num
+            inst_ptr = vm->tlb[vpn & TLB_MASK].ptr;          // Get page base address from TLB
+            page_addr = vm->tlb[vpn & TLB_MASK].e << 12;     // Page address (on the VM)
         } else break;
     }
 }

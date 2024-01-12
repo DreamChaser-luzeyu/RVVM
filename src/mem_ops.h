@@ -53,6 +53,11 @@ static inline void write_uint64_le_m(void* addr, uint64_t val) {
     arr[7] = (val >> 56) & 0xFF;
 }
 
+/**
+ * 4-bytes endian convertion function
+ * @param addr Pointer to the value to be converted
+ * @return Converted value
+ */
 static inline uint32_t read_uint32_le_m(const void* addr) {
     const uint8_t* arr = (const uint8_t*)addr;
     return (uint32_t)arr[0] | ((uint32_t)arr[1] << 8)

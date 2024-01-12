@@ -569,20 +569,31 @@ void riscv_mmu_vma_mmio_write(rvvm_hart_t* vm, vaddr_t addr, void* buff, size_t 
     }
 }
 
+/**
+ * Fetch instruction through MMU
+ * @param vm CPU hart
+ * @param addr Virtual Address
+ * @param inst Pointer to a variable to store the instruction to be fetched
+ * @return true  - successfully read value through MMU \n
+ *         false - page fault, trap raised
+ */
 bool riscv_mmu_fetch_inst(rvvm_hart_t* vm, vaddr_t addr, uint32_t* inst)
 {
     uint8_t buff[4] = {0};
-    if (!riscv_block_in_page(addr, 4)) {
+    if (!riscv_block_in_page(addr, 4)) {    // Check if a 4-byte instruction at a same page
+        // --- Oops maybe a cross-page instruction! Relax, let us deal with it.
+        // Try reading first 2 bytes, raise trap if encounter page fault.
         if (!riscv_mmu_op(vm, addr, buff, 2, MMU_EXEC)) return false;
-        if ((buff[0] & 0x3) == 0x3) {
-            // This is a 4-byte instruction scattered between pages
+        if ((buff[0] & 0x3) == 0x3) {          // Check if it is a C-ext
+            // Not C-ext inst, so it is 4 bytes and scattered between pages
             // Fetch second part (may trigger a pagefault, that's the point)
             if (!riscv_mmu_op(vm, addr + 2, buff + 2, 2, MMU_EXEC)) return false;
         }
         *inst = read_uint32_le_m(buff);
         return true;
     }
-
+    // --- Fortunately we have 4 bytes at same page
+    // - Let us read all 4 bytes !
     if (riscv_mmu_op(vm, addr, buff, 4, MMU_EXEC)) {
         *inst = read_uint32_le_m(buff);
         return true;

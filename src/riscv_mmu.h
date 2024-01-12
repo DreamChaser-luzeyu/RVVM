@@ -109,28 +109,43 @@ static inline vaddr_t riscv_align_addr(vaddr_t addr, size_t size)
     return addr & (~(vaddr_t)(size - 1));
 }
 
-/*
- * Inlined TLB-cached memory operations (used for performance)
- * Fall back to MMU functions if:
- *     Address is not TLB-cached (TLB miss/protection fault)
- *     Address misalign (optimized on hosts without misalign)
- *     MMIO is accessed (since MMIO regions aren't memory)
- */
 
+/**
+ * @brief Fetch instruction \n\n
+ * Try fetching from TLB first, and try fetching through MMU if TLB miss
+ * @param vm CPU hart
+ * @param addr Virtual address
+ * @param inst Pointer to a variable to store the instruction to be fetched
+ * @return true  - successfully read value through MMU \n
+ *         false - page fault, trap raised
+ * @details Inlined TLB-cached memory operations (used for performance)
+ *          Fall back to MMU functions if:
+ *          Address is not TLB-cached (TLB miss/protection fault)
+ *          Address mis-align (optimized on hosts without mis-align)
+ *          MMIO is accessed (since MMIO regions aren't memory)
+ */
 static inline bool riscv_fetch_inst(rvvm_hart_t* vm, vaddr_t addr, uint32_t* inst)
 {
-    vaddr_t vpn = addr >> PAGE_SHIFT;
-    if (likely(vm->tlb[vpn & TLB_MASK].e == vpn)) {
+    vaddr_t vpn = addr >> PAGE_SHIFT;                        // Get the Virtual Page Num from vaddr
+    if (likely(vm->tlb[vpn & TLB_MASK].e == vpn)) {          // Check if TLB hit
+        // --- First 2 bytes TLB HIT !
+                                                             // Cal the paddr of the inst
         *inst = read_uint16_le_m((void*)(size_t)(vm->tlb[vpn & TLB_MASK].ptr + TLB_VADDR(addr)));
-        if ((*inst & 0x3) == 0x3) {
-            // This is a 4-byte instruction, force tlb lookup again
-            vpn = (addr + 2) >> PAGE_SHIFT;
-            if (likely(vm->tlb[vpn & TLB_MASK].e == vpn)) {
+                                                             // We do not know the size of the inst, so read 2 bytes first
+        if ((*inst & 0x3) == 0x3) {                          // Check if it is a C-ext
+            // --- Not a C-ext inst, 4 bytes size
+            // This is a 4-byte instruction, another TLB lookup is needed
+            vpn = (addr + 2) >> PAGE_SHIFT;                  // Calculate VPN again
+            if (likely(vm->tlb[vpn & TLB_MASK].e == vpn)) {  // Check if TLB hit
+                // --- TLB HIT !
                 *inst |= ((uint32_t)read_uint16_le_m((void*)(size_t)(vm->tlb[vpn & TLB_MASK].ptr + TLB_VADDR(addr + 2)))) << 16;
+                                                             // Read the remaining 2 bytes
                 return true;
             }
+            // If TLB miss then    v|v
         } else return true;
     }
+    // --- TLB MISS
     return riscv_mmu_fetch_inst(vm, addr, inst);
 }
 
