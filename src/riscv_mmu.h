@@ -112,7 +112,8 @@ static inline vaddr_t riscv_align_addr(vaddr_t addr, size_t size)
 
 /**
  * @brief Fetch instruction \n\n
- * Try fetching from TLB first, and try fetching through MMU if TLB miss
+ * @details Only fetch from Main Memory, not from MMIO
+ * @details Try fetching from TLB first, and try fetching through MMU if TLB miss
  * @param vm CPU hart
  * @param addr Virtual address
  * @param inst Pointer to a variable to store the instruction to be fetched
@@ -171,10 +172,20 @@ static inline bool riscv_virt_translate_w(rvvm_hart_t* vm, vaddr_t vaddr, paddr_
     return riscv_mmu_translate(vm, vaddr, paddr, MMU_WRITE);
 }
 
+/**
+ * @brief Translate vaddr to paddr for EXEC
+ * @param vm hart
+ * @param vaddr Virtual address for the Guest VM (GPR[Program Counter])
+ * @param paddr Physical address for the Guest VM
+ * @return if success
+ */
 static inline bool riscv_virt_translate_e(rvvm_hart_t* vm, vaddr_t vaddr, paddr_t* paddr)
 {
     vaddr_t vpn = vaddr >> PAGE_SHIFT;
-    if (likely(vm->tlb[vpn & TLB_MASK].e == vpn)) {
+    if (likely(vm->tlb[vpn & TLB_MASK].e == vpn)) {   // Check if TLB hits
+        // Calculate the physical address (for the Guest VM)
+        //       |-------the cached address of the vaddr------|
+        //       |-the address relative to the beginning address of ram of the vaddr--|
         *paddr = vm->tlb[vpn & TLB_MASK].ptr + TLB_VADDR(vaddr) - (size_t)vm->mem.data + vm->mem.begin;
         return true;
     }
@@ -208,12 +219,20 @@ static inline vmptr_t riscv_vma_translate_e(rvvm_hart_t* vm, vaddr_t addr, void*
     return riscv_mmu_vma_translate(vm, addr, buff, size, MMU_EXEC);
 }
 
+
 #ifdef USE_VMSWAP
 vmptr_t riscv_phys_translate(rvvm_hart_t* vm, paddr_t addr)
 #else
+/**
+ * @brief Convert physical address (for the guest VM) to cached address (for the host)
+ * @details Cache main memory only
+ * @param vm hart
+ * @param addr physical address (for the guest VM)
+ * @return Pointer to the cached memory, NULL if out of range
+ */
 static inline vmptr_t riscv_phys_translate(rvvm_hart_t* vm, paddr_t addr)
 {
-    if (likely(addr >= vm->mem.begin && (addr - vm->mem.begin) < vm->mem.size)) {
+    if (likely(addr >= vm->mem.begin && (addr - vm->mem.begin) < vm->mem.size)) { // Check if in main memory range
         return vm->mem.data + (addr - vm->mem.begin);
     }
     return NULL;

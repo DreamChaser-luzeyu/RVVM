@@ -106,10 +106,17 @@ void riscv_tlb_flush_page(rvvm_hart_t* vm, vaddr_t addr)
     }
 }
 
+/**
+ * @brief Put vaddr->ptr TLB entry to TLB
+ * @param vm hart
+ * @param vaddr Virtual addr (for the guest VM)
+ * @param ptr
+ * @param op
+ */
 static void riscv_tlb_put(rvvm_hart_t* vm, vaddr_t vaddr, vmptr_t ptr, uint8_t op)
 {
     vaddr_t vpn = vaddr >> PAGE_SHIFT;
-    rvvm_tlb_entry_t* entry = &vm->tlb[vpn & TLB_MASK];
+    rvvm_tlb_entry_t* entry = &vm->tlb[vpn & TLB_MASK];     // Get TLB key
 
     /*
     * Add only requested access bits for correct access/dirty flags
@@ -264,7 +271,14 @@ static bool riscv_mmu_translate_rv64(rvvm_hart_t* vm, vaddr_t vaddr, paddr_t* pa
 
 #endif
 
-// Translate virtual address to physical with respect to current CPU mode
+/**
+ * @brief Translate virtual address to physical address (for the Guest VM) according to current CPU mode
+ * @param vm hart
+ * @param vaddr virtual address (for the VM)
+ * @param paddr pointer to the variable to store the physical address (for the VM)
+ * @param access
+ * @return
+ */
 bool riscv_mmu_translate(rvvm_hart_t* vm, vaddr_t vaddr, paddr_t* paddr, uint8_t access)
 {
     uint8_t priv = vm->priv_mode;
@@ -280,7 +294,7 @@ bool riscv_mmu_translate(rvvm_hart_t* vm, vaddr_t vaddr, paddr_t* paddr, uint8_t
     if (priv <= PRIVILEGE_SUPERVISOR) {
         switch (vm->mmu_mode) {
             case CSR_SATP_MODE_PHYS:
-                *paddr = vaddr;
+                *paddr = vaddr;                 // no addr translation
                 return true;
             case CSR_SATP_MODE_SV32:
                 return riscv_mmu_translate_sv32(vm, vaddr, paddr, priv, access);
@@ -426,7 +440,7 @@ static bool riscv_mmu_op(rvvm_hart_t* vm, vaddr_t addr, void* dest, uint8_t size
     vmptr_t ptr;
     uint32_t trap_cause;
 
-    // Handle misalign between pages
+    // --- Handle misalign between pages
     if (!riscv_block_in_page(addr, size)) {
         // Prevent recursive faults by checking return flag
         uint8_t part_size = PAGE_SIZE - (addr & PAGE_MASK);
@@ -436,10 +450,10 @@ static bool riscv_mmu_op(rvvm_hart_t* vm, vaddr_t addr, void* dest, uint8_t size
 
     if (riscv_mmu_translate(vm, addr, &paddr, access)) {
         //rvvm_info("Hart %p accessing physmem at 0x%08x", vm, paddr);
-        ptr = riscv_phys_translate(vm, paddr);
+        ptr = riscv_phys_translate(vm, paddr);          // Get pointer of the physical addr (for the Guest VM)
         if (ptr) {
-            // Physical address in main memory, cache address translation
-            riscv_tlb_put(vm, addr, ptr, access);
+            // `paddr` in main memory, cache address translation
+            riscv_tlb_put(vm, addr, ptr, access);   // Cache vaddr->ptr map in TLB
             if (access == MMU_WRITE) {
                 // Clear JITted blocks & flush trace cache if necessary
                 riscv_jit_mark_dirty_mem(vm->machine, paddr, size);
@@ -452,6 +466,7 @@ static bool riscv_mmu_op(rvvm_hart_t* vm, vaddr_t addr, void* dest, uint8_t size
             }
             return true;
         }
+        // --- `paddr` not in Main Memory range, maybe a mmio address
         // Physical address not in memory region, check MMIO
         if (riscv_mmio_scan(vm, addr, paddr, dest, size, access)) {
             return true;

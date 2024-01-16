@@ -101,12 +101,12 @@ typedef size_t  branch_t;
 #define LINKAGE_JMP  2
 
 typedef struct {
-    uint8_t* data;
-    const uint8_t* code;
+    uint8_t* data;          ///< Data Cache
+    const uint8_t* code;    ///< JIT Code Cache
     size_t curr;
     size_t size;
-    hashmap_t blocks;
-    hashmap_t block_links;
+    hashmap_t blocks;       ///< size 64 `block->phys_pc` to `code`
+    hashmap_t block_links;  ///< size 64
 
     // Dirty memory tracking
     uint32_t* dirty_pages;
@@ -120,6 +120,10 @@ typedef struct {
     regflags_t flags;   // Register allocation details
 } rvjit_reginfo_t;
 
+
+/**
+ * Act as the value of TLB cache
+ */
 typedef struct {
     rvjit_heap_t heap;
     vector_t(struct {paddr_t dest; size_t ptr;}) links;
@@ -130,7 +134,7 @@ typedef struct {
     size_t abireclaim_mask;  // Bitmask of reclaimed abi-clobbered host registers to restore
     rvjit_reginfo_t regs[RVJIT_REGISTERS];
     vaddr_t virt_pc;
-    paddr_t phys_pc;
+    paddr_t phys_pc;        ///< PC that JIT operates on
     int32_t pc_off;
     bool rv64;
     uint8_t linkage;

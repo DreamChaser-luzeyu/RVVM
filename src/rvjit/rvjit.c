@@ -172,14 +172,21 @@ void rvjit_block_init(rvjit_block_t* block)
     rvjit_emit_init(block);
 }
 
+/**
+ * Copy data from BLOCK to JIT CACHE ???
+ * @param block
+ * @return
+ */
 rvjit_func_t rvjit_block_finalize(rvjit_block_t* block)
 {
-    uint8_t* dest = block->heap.data + block->heap.curr;
-    const uint8_t* code;
-    if (block->heap.code == NULL) {
-        code = dest;
+    uint8_t* dest = block->heap.data + block->heap.curr;   // Destination (heap.data + heap.curr) to store `block->code`
+    const uint8_t* code;                                   // Value to be put into hash_map. Emm what does this mean?
+                                                           // Pointer to the entry point to the cached code?
+
+    if (block->heap.code == NULL) {                        // if heap.code is null (Meaning it is DATA CACHE ?)
+        code = dest;                                       // then let code point to heap.data + heap.curr
     } else {
-        code = block->heap.code + block->heap.curr;
+        code = block->heap.code + block->heap.curr;        // Otherwise let code point to heap.code + heap.curr
     }
 
     rvjit_emit_end(block, block->linkage);
@@ -196,9 +203,10 @@ rvjit_func_t rvjit_block_finalize(rvjit_block_t* block)
     memcpy(dest, block->code, block->size);
     rvjit_flush_icache(code, block->size);
     //block->heap.curr = (block->heap.curr + block->size + 31) & ~31ULL;
-    block->heap.curr += block->size;
+    block->heap.curr += block->size;                       // increase heap size by `block->size`
 
     hashmap_put(&block->heap.blocks, block->phys_pc, (size_t)code);
+                                                           // Map `phys_pc` to `code`
 
 #ifdef RVJIT_NATIVE_LINKER
     vector_t(uint8_t*)* linked_blocks;
@@ -237,12 +245,14 @@ rvjit_func_t rvjit_block_finalize(rvjit_block_t* block)
 
 rvjit_func_t rvjit_block_lookup(rvjit_block_t* block, paddr_t phys_pc)
 {
-    if (rvjit_page_needs_flush(block, phys_pc)) {
+    // --- Flush JIT Page
+    if (rvjit_page_needs_flush(block, phys_pc)) {   // TODO: Maybe could be optimized with `unlikely`
         vector_t(uint8_t*)* linked_blocks;
         phys_pc &= ~0xFFFULL;
-
+        // - Remove all keys within the page
         for (size_t i=0; i<4096; ++i) {
-            hashmap_remove(&block->heap.blocks, phys_pc + i);
+            hashmap_remove(&block->heap.blocks, phys_pc + i);   // Remove for blocks map
+            // - Remove for block_links map
             linked_blocks = (void*)hashmap_get(&block->heap.block_links, phys_pc + i);
             if (linked_blocks) {
                 vector_free(*linked_blocks);
@@ -252,6 +262,7 @@ rvjit_func_t rvjit_block_lookup(rvjit_block_t* block, paddr_t phys_pc)
         }
         return NULL;
     }
+    // Lookup instruction function from JIT cache
     return (rvjit_func_t)hashmap_get(&block->heap.blocks, phys_pc);
 }
 

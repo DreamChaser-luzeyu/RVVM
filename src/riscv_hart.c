@@ -120,6 +120,10 @@ rvvm_addr_t riscv_hart_run_userland(rvvm_hart_t* vm)
 }
 
 #ifdef USE_RV64
+/**
+ * TO BE VERIFIED Switch between 32bit mode and 64 bit mode
+ * @param vm CPU hart
+ */
 void riscv_update_xlen(rvvm_hart_t* vm)
 {
     bool rv64 = false;

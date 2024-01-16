@@ -76,7 +76,7 @@ void riscv_install_opcode_C(rvvm_hart_t* vm, uint32_t opcode, riscv_inst_c_t fun
 
 static inline void riscv_jit_tlb_put(rvvm_hart_t* vm, vaddr_t vaddr, rvjit_func_t block)
 {
-    vaddr_t entry = (vaddr >> 1) & TLB_MASK;
+    vaddr_t entry = (vaddr >> 1) & TLB_MASK;        // Low 8 bits of `vaddr >> 1` as TLB Key
     vm->jtlb[entry].pc = vaddr;
     vm->jtlb[entry].block = block;
 }
@@ -118,15 +118,20 @@ void riscv_jit_mark_dirty_mem(rvvm_machine_t* machine, rvvm_addr_t addr, size_t 
     }
 }
 
+/**
+ * @brief Finalize JIT
+ * @details
+ * @param vm hart
+ */
 static void riscv_jit_finalize(rvvm_hart_t* vm)
 {
     if (rvjit_block_nonempty(&vm->jit)) {
-        rvjit_func_t block = rvjit_block_finalize(&vm->jit);
+        rvjit_func_t block = rvjit_block_finalize(&vm->jit);    // Entry point to the cached code
 
-        if (block) {
-            riscv_jit_tlb_put(vm, vm->jit.virt_pc, block);
-        } else {
-            // Our cache is full, flush it
+        if (block) {                                                 // If cached code DO EXIST
+            riscv_jit_tlb_put(vm, vm->jit.virt_pc, block);     // then put into TLB
+        } else {                                                     // Do not have cached code because cache full
+            // --- Our cache is full, flush it
             riscv_jit_tlb_flush(vm);
             rvjit_flush_cache(&vm->jit);
         }
@@ -137,26 +142,39 @@ static void riscv_jit_finalize(rvvm_hart_t* vm)
 
 #endif
 
+/**
+ * Emulate an instruction
+ * @param vm core to run on
+ * @param instruction
+ */
 static inline void riscv_emulate(rvvm_hart_t *vm, uint32_t instruction)
 {
 #ifdef USE_JIT
     if (unlikely(vm->jit_compiling)) {
         // If we hit non-compilable instruction or cross page boundaries,
         // the block is finalized.
-        if (vm->block_ends
-        || (vm->jit.virt_pc >> PAGE_SHIFT) != (vm->registers[REGISTER_PC] >> PAGE_SHIFT)) {
+        if (vm->block_ends                                          // Exec reach end of block
+        || (vm->jit.virt_pc >> PAGE_SHIFT) != (vm->registers[REGISTER_PC] >> PAGE_SHIFT)
+                                                                    // Exec already reach page boundary
+        ) {
             riscv_jit_finalize(vm);
         }
         vm->block_ends = true;
     }
+    // If not `vm->jit_compiling` then fallback to Interpret Mode ?
 #endif
-    if ((instruction & RV_OPCODE_MASK) != RV_OPCODE_MASK) {
+    // --- Interpret Mode
+    if ((instruction & RV_OPCODE_MASK) != RV_OPCODE_MASK) {         // Check if instruction ends with 0b11
+        // --- Instruction does not end with 0b11, which means this is C-type
         vm->decoder.opcodes_c[riscv_c_funcid(instruction)](vm, instruction);
+                                                                    // Exec this instruction
         // FYI: Any jump instruction implementation should take care of PC increment
-        vm->registers[REGISTER_PC] += 2;
+        vm->registers[REGISTER_PC] += 2;                            // Take care of PC increment
     } else {
+        // --- Instruction ends with 0b11, which means this is a regular 4-byte instruction
         vm->decoder.opcodes[riscv_funcid(instruction)](vm, instruction);
-        vm->registers[REGISTER_PC] += 4;
+                                                                    // Exec this instruction
+        vm->registers[REGISTER_PC] += 4;                            // Take care of PC increment
     }
 }
 
@@ -205,28 +223,35 @@ void riscv_decoder_enable_fpu(rvvm_hart_t* vm, bool enable)
 #endif
 }
 
-/*
- * Optimized dispatch loop that does not fetch each instruction,
- * and invokes MMU on page change instead.
- * This gains us about 40-60% more performance depending on workload.
- * Attention: Any TLB flush must clear vm->wait_event to
- * restart dispatch loop, otherwise it will continue executing current page
+/**
+ * @brief Run core until event
+ * @details Optimized dispatch loop that does not fetch each instruction
+ * @details and invokes MMU on page change instead.
+ * @details This gains us about 40-60% more performance depending on workload.
+ * @attention Attention: Any TLB flush must clear `vm->wait_event` to
+ * @attention restart dispatch loop, otherwise it will continue executing current page
+ * @param vm core hart
  */
+#ifndef __llvm__
 TSAN_SUPPRESS void riscv_run_till_event(rvvm_hart_t* vm)
 {
-    size_t inst_ptr = 0; // This variable marks the base address of a page on the REAL memory
-                         // Updated before any read
+    size_t inst_ptr = 0;   // This variable marks the base address of a page on the REAL memory
+                           // Updated before any read, will be initialized at line 270 first
     uint32_t instruction;
     // page_addr should always mismatch pc by at least 1 page before execution
-    vaddr_t inst_addr, page_addr = vm->registers[REGISTER_PC] + 0x1000;
+    vaddr_t inst_addr,     // To be filled with PC register
+            page_addr = vm->registers[REGISTER_PC] + 0x1000;
 
     // Execute instructions loop until some event occurs (interrupt, trap)
     while (likely(vm->wait_event)) {
-        vm->registers[REGISTER_ZERO] = 0;
-        inst_addr = vm->registers[REGISTER_PC];
-        if (likely(inst_addr - page_addr < 0xFFD)) {
+        vm->registers[REGISTER_ZERO] = 0;                   // clear the ZERO reg
+        inst_addr = vm->registers[REGISTER_PC];             // update inst_addr
+        if (likely(inst_addr - page_addr < 0xFFD)) {        // check if instruction inside page (cached in TLB)
+            // --- FAST PATH Instruction inside current page, read instruction & emu, bypass MMU
             riscv_emulate(vm, read_uint32_le_m((vmptr_t)(size_t)(inst_ptr + TLB_VADDR(inst_addr))));
-#ifndef __llvm__
+                                                            // exec one instruction
+            // --- We still want to use this "fast path" if `inst_addr` within current page,
+            // --- So we wanna use the `continue;` statement to avoid the "slow path"
             vm->registers[REGISTER_ZERO] = 0;
             inst_addr = vm->registers[REGISTER_PC];
             if (likely(vm->wait_event)) {
@@ -235,18 +260,48 @@ TSAN_SUPPRESS void riscv_run_till_event(rvvm_hart_t* vm)
                 }
             }
             continue;
-#endif
         }
-#ifdef __llvm__
-        else
-#endif
-        if (likely(riscv_fetch_inst(vm, inst_addr, &instruction))) {
+        // --- SLOW PATH Instruction not inside current page / `inst_ptr` uninitialized
+        if (likely(riscv_fetch_inst(vm, inst_addr, &instruction))) { // fetch inst using MMU operation
             riscv_emulate(vm, instruction);
-            // Update pointer to the current page in real memory
+            // --- Update EQUIVALENT RAM base address
             // If we are executing code from MMIO, direct memory fetch fails
             vaddr_t vpn = vm->registers[REGISTER_PC] >> 12;  // Virtual Page Num
-            inst_ptr = vm->tlb[vpn & TLB_MASK].ptr;          // Get page base address from TLB
-            page_addr = vm->tlb[vpn & TLB_MASK].e << 12;     // Page address (on the VM)
+            inst_ptr = vm->tlb[vpn & TLB_MASK].ptr;          // EQUIVALENT RAM base address for this page from TLB
+            page_addr = vm->tlb[vpn & TLB_MASK].e << 12;     // TODO: To Be Verified Page base address (for the VM)?
         } else break;
     }
 }
+#else
+TSAN_SUPPRESS void riscv_run_till_event(rvvm_hart_t* vm)
+{
+    size_t inst_ptr = 0;   // This variable marks the base address of a page on the REAL memory
+    // Updated before any read, will be initialized at line 270 first
+    uint32_t instruction;
+    // page_addr should always mismatch pc by at least 1 page before execution
+    vaddr_t inst_addr,     // To be filled with PC register
+    page_addr = vm->registers[REGISTER_PC] + 0x1000;
+
+    // Execute instructions loop until some event occurs (interrupt, trap)
+    while (likely(vm->wait_event)) {
+        vm->registers[REGISTER_ZERO] = 0;                   // clear the ZERO reg
+        inst_addr = vm->registers[REGISTER_PC];             // update inst_addr
+        if (likely(inst_addr - page_addr < 0xFFD)) {        // check if instruction inside page (cached in TLB)
+            // --- FAST PATH Instruction inside current page, read instruction & emu, bypass MMU
+            riscv_emulate(vm, read_uint32_le_m((vmptr_t)(size_t)(inst_ptr + TLB_VADDR(inst_addr))));
+            // exec one instruction
+
+        }
+        // --- SLOW PATH Instruction not inside current page / `inst_ptr` uninitialized
+        // TODO: Why using a different way for llvm? Is this just because this is faster for llvm?
+        else if (likely(riscv_fetch_inst(vm, inst_addr, &instruction))) { // fetch inst using MMU operation
+            riscv_emulate(vm, instruction);
+            // --- Update EQUIVALENT RAM base address
+            // If we are executing code from MMIO, direct memory fetch fails
+            vaddr_t vpn = vm->registers[REGISTER_PC] >> 12;  // Virtual Page Num
+            inst_ptr = vm->tlb[vpn & TLB_MASK].ptr;          // EQUIVALENT RAM base address for this page from TLB
+            page_addr = vm->tlb[vpn & TLB_MASK].e << 12;     // TODO: To Be Verified Page base address (for the VM)?
+        } else break;
+    }
+}
+#endif

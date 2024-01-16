@@ -144,12 +144,15 @@ typedef struct {
 
 /*
  * Address translation cache
- * In future, it would be nice to verify if cache-line alignment
+ * In the future, it would be nice to verify if cache-line alignment
  * gives any profit (entries scattered between cachelines waste L1)
  */
 typedef struct {
     // Pointer to page (with vaddr subtracted? faster tlb translation)
-    size_t ptr;
+    size_t ptr;             ///< Address (for the host machine) of the page - vaddr, WHY minus vaddr? \n
+                            ///< I believe this means the EQUIVALENT base address for the specified page \n
+                            ///< So `ptr + vaddr` points to the real data of the vaddr \n
+                            ///< although the `ptr` itself just points to a meaningless place \n
     // Make entry size a power of 2 (32 or 16 bytes)
 #if !defined(HOST_64BIT) && defined(USE_RV64)
     size_t align;
@@ -203,9 +206,9 @@ struct rvvm_hart_t {
 #endif
 
     // We want short offsets from vmptr to tlb
-    rvvm_tlb_entry_t tlb[TLB_SIZE];
+    rvvm_tlb_entry_t tlb[TLB_SIZE];             ///< TLB
 #ifdef USE_JIT
-    rvvm_jtlb_entry_t jtlb[TLB_SIZE];
+    rvvm_jtlb_entry_t jtlb[TLB_SIZE];           ///< TLB for JIT
 #endif
     rvvm_decoder_t decoder;
     rvvm_ram_t mem;
